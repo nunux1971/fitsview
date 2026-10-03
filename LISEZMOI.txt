@@ -1,0 +1,16 @@
+fitsview — visionneuse pour trier ses brutes FITS et vidéos SER
+==============================================================
+
+Contenu de l'archive
+  fitsview.py    le programme
+  fitsview.svg   l'icône (vectorielle)
+  fitsview.png   l'icône (256 x 256)
+  installer.sh   installe fitsview dans le menu des applications
+  NOTICE.md      la notice d'utilisation complète
+
+Démarrage rapide (Debian, Ubuntu, Mint)
+  sudo apt install python3-pyqt5 python3-numpy python3-astropy
+  sh installer.sh          # ajoute fitsview au menu
+  ./fitsview.py            # ou lancer directement sans installer
+
+Pour désinstaller : sh installer.sh --retirer
