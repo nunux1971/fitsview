@@ -4,7 +4,7 @@ Octobre 2026
 
 ## À quoi sert fitsview
 
-fitsview sert à passer en revue ses brutes FITS, ou les images d'une vidéo SER, une par une, à écarter les mauvaises et à préparer le reste pour le prétraitement. Il ne modifie jamais le contenu de vos fichiers : il les affiche, les déplace ou les assemble en vidéo SER.
+fitsview sert à passer en revue ses brutes FITS ou RAW Canon (CR2), ou les images d'une vidéo SER, une par une, à écarter les mauvaises et à préparer le reste pour le prétraitement. Il ne modifie jamais le contenu de vos fichiers : il les affiche, les déplace ou les assemble en vidéo SER.
 
 Une séance typique se déroule en quatre temps :
 
@@ -22,6 +22,8 @@ fitsview est un script Python. Il a besoin de PyQt5, numpy et astropy, à instal
 | Debian, Ubuntu, Linux Mint | `sudo apt install python3-pyqt5 python3-numpy python3-astropy` |
 | Fedora | `sudo dnf install python3-qt5 python3-numpy python3-astropy` |
 | Arch, Manjaro | `sudo pacman -S python-pyqt5 python-numpy python-astropy` |
+
+Pour ouvrir les fichiers RAW Canon (CR2), installez en plus le petit programme **dcraw** : `sudo apt install dcraw` sous Debian, Ubuntu ou Mint, `sudo dnf install dcraw` sous Fedora, `sudo pacman -S dcraw` sous Arch. Si le module Python **rawpy** est installé, fitsview l'utilise à la place : il est un peu plus rapide, mais n'est pas proposé par toutes les distributions.
 
 ### Lancer le programme
 
@@ -61,9 +63,9 @@ La fenêtre est divisée en trois colonnes, dont vous pouvez régler la largeur 
 
 ### Ajouter des images
 
-Le plus simple est de glisser des fichiers ou un dossier entier depuis votre gestionnaire de fichiers et de les déposer n'importe où sur la fenêtre. Vous pouvez aussi passer par **Fichier ▸ Ajouter des fichiers FITS ou SER** (Ctrl+O) ou **Fichier ▸ Ajouter un dossier** (Ctrl+D).
+Le plus simple est de glisser des fichiers ou un dossier entier depuis votre gestionnaire de fichiers et de les déposer n'importe où sur la fenêtre. Vous pouvez aussi passer par **Fichier ▸ Ajouter des fichiers FITS, SER ou CR2** (Ctrl+O) ou **Fichier ▸ Ajouter un dossier** (Ctrl+D).
 
-Quand vous ajoutez un dossier, fitsview prend les fichiers FITS et les vidéos SER qu'il contient directement, sans descendre dans les sous-dossiers. Vos darks, flats ou offsets rangés à part ne se mélangent donc pas aux brutes. Les extensions reconnues sont `.fit`, `.fits`, `.fts` et leurs versions compressées `.gz`.
+Quand vous ajoutez un dossier, fitsview prend les fichiers FITS, les vidéos SER et les RAW CR2 qu'il contient directement, sans descendre dans les sous-dossiers. Vos darks, flats ou offsets rangés à part ne se mélangent donc pas aux brutes. Les extensions reconnues sont `.fit`, `.fits`, `.fts` et leurs versions compressées `.gz`.
 
 La liste est triée par nom de fichier, ce qui correspond à l'ordre chronologique avec la plupart des logiciels d'acquisition. Un fichier déjà présent n'est jamais ajouté deux fois. Survolez un nom pour voir son chemin complet.
 
@@ -104,6 +106,19 @@ Le zoom est conservé quand vous changez d'image. Zoomez sur un coin, puis faite
 
 Les logiciels ne s'accordent pas sur le sens des lignes dans un fichier FITS. fitsview suit le mot-clé ROWORDER quand il est présent. Si une image apparaît à l'envers par rapport à Siril, appuyez sur **V** ou utilisez **Affichage ▸ Retourner verticalement**.
 
+## Fichiers RAW Canon (CR2)
+
+Les fichiers CR2 de vos reflex Canon s'ajoutent, s'affichent et se trient exactement comme des FITS. fitsview lit les données brutes du capteur, sans traitement : c'est ce qu'il faut pour juger une brute avant le prétraitement.
+
+- **Couleur** : un CR2 est une image en mosaïque de Bayer. Cochez **Débayeriser (couleur)** pour la voir en couleur ; la matrice est lue dans le fichier.
+- **Informations** : le temps de pose, la sensibilité ISO, le modèle de boîtier, la focale et la date sont repris des données EXIF. Ils s'affichent dans la barre du bas et dans la colonne de droite.
+- **Rangement** : un CR2 rejeté se déplace dans « rejetes » comme un FITS.
+- **Export** : les CR2 peuvent être assemblés en vidéo SER ou convertis en fichiers FITS 16 bits (menu Export), par exemple pour un logiciel qui ne lit pas les RAW.
+
+La date EXIF est celle de l'horloge de l'appareil, souvent réglée à l'heure locale et non en temps universel. Vérifiez-la avant de vous en servir pour des mesures précises.
+
+Le décodage d'un CR2 prend environ une demi-seconde. Le défilement reste fluide grâce au préchargement, mais la lecture vidéo d'une série de CR2 sera plus lente qu'avec des FITS.
+
 ## Vidéos SER
 
 Une vidéo SER s'ajoute comme un fichier FITS, par glisser-déposer ou par le menu Fichier. Chacune de ses images apparaît alors dans la liste sous la forme `jupiter.ser  #0001`, `#0002`… et se trie exactement comme un FITS : affichage, étirement, débayerisation, zoom et rejet fonctionnent de la même façon.
@@ -143,11 +158,11 @@ La case **Passer à l'image suivante après marquage** est cochée par défaut. 
 
 ### Ranger ou supprimer les rejetées
 
-Une fois le tri terminé, **Tri ▸ Déplacer les FITS rejetés dans « rejetes »** (Ctrl+M) déplace chaque image rejetée dans un sous-dossier `rejetes` créé à côté d'elle. Rien n'est perdu : vous pouvez récupérer un fichier à la main plus tard. Les images déplacées disparaissent de la liste, et le dossier d'origine ne contient plus que les bonnes images, prêtes pour Siril ou PixInsight.
+Une fois le tri terminé, **Tri ▸ Déplacer les fichiers rejetés dans « rejetes »** (Ctrl+M) déplace chaque image rejetée dans un sous-dossier `rejetes` créé à côté d'elle. Rien n'est perdu : vous pouvez récupérer un fichier à la main plus tard. Les images déplacées disparaissent de la liste, et le dossier d'origine ne contient plus que les bonnes images, prêtes pour Siril ou PixInsight.
 
-**Tri ▸ Supprimer définitivement les FITS rejetés** efface les fichiers du disque, sans passer par la corbeille. fitsview demande une confirmation, avec « Non » proposé par défaut. Préférez le déplacement tant que vous n'êtes pas sûr de vous.
+**Tri ▸ Supprimer définitivement les fichiers rejetés** efface les fichiers du disque, sans passer par la corbeille. fitsview demande une confirmation, avec « Non » proposé par défaut. Préférez le déplacement tant que vous n'êtes pas sûr de vous.
 
-Ces deux commandes ne concernent que les fichiers FITS. Les images rejetées issues d'une vidéo SER restent dans la liste ; écartez-les en exportant les images gardées.
+Ces deux commandes concernent les fichiers FITS et CR2. Les images rejetées issues d'une vidéo SER restent dans la liste ; écartez-les en exportant les images gardées.
 
 ## Créer une vidéo SER
 
@@ -178,7 +193,7 @@ Un SER n'est pas compressé : il pèse à peu près la somme des FITS qu'il cont
 
 **Export ▸ Exporter en FITS les images sélectionnées** et **Export ▸ Exporter en FITS toutes les images gardées** enregistrent les images choisies dans un dossier que vous indiquez. Comme pour le SER, la première commande suit la sélection et la seconde prend tout sauf les rejetées.
 
-Chaque image issue d'une vidéo SER devient un fichier FITS nommé d'après la vidéo et son numéro, par exemple `jupiter_0042.fits`. Les pixels sont conservés tels quels, en 8 ou 16 bits, avec la matrice de Bayer, l'heure de prise de vue et le numéro de l'image dans l'en-tête. Les images déjà en FITS sont simplement copiées.
+Chaque image issue d'une vidéo SER devient un fichier FITS nommé d'après la vidéo et son numéro, par exemple `jupiter_0042.fits`. Les pixels sont conservés tels quels, en 8 ou 16 bits, avec la matrice de Bayer, l'heure de prise de vue et le numéro de l'image dans l'en-tête. Les CR2 sont convertis en FITS 16 bits portant le même nom, avec la matrice de Bayer et les informations EXIF dans l'en-tête. Les images déjà en FITS sont simplement copiées.
 
 Cette commande sert surtout à extraire quelques images d'un SER, ou à le convertir entièrement en FITS pour un logiciel qui ne lit pas les vidéos.
 
@@ -195,9 +210,9 @@ Cette commande sert surtout à extraire quelques images d'un SER, ou à le conve
 | 1 | Zoom à 100 % |
 | V | Retourner l'image verticalement |
 | Molette | Zoomer / dézoomer |
-| Ctrl+O | Ajouter des fichiers FITS ou SER |
+| Ctrl+O | Ajouter des fichiers FITS, SER ou CR2 |
 | Ctrl+D | Ajouter un dossier |
-| Ctrl+M | Déplacer les FITS rejetés dans « rejetes » |
+| Ctrl+M | Déplacer les fichiers rejetés dans « rejetes » |
 | Ctrl+E | Créer un SER avec les images sélectionnées |
 | Ctrl+Maj+E | Créer un SER avec toutes les images gardées |
 | Ctrl+Q | Quitter |
@@ -210,7 +225,7 @@ Les touches de tri et de navigation agissent sur la liste de gauche. Si elles se
 Une dépendance manque. Relancez la commande d'installation de votre distribution (section Installation), puis réessayez.
 
 **Mon dossier est déposé mais la liste reste vide.**
-Vérifiez que les fichiers ont bien une extension `.fit`, `.fits` ou `.fts`, et qu'ils sont directement dans le dossier déposé, pas dans un sous-dossier. Le message « Aucune nouvelle image FITS ou SER trouvée » s'affiche alors en bas de la fenêtre.
+Vérifiez que les fichiers ont bien une extension `.fit`, `.fits`, `.fts`, `.ser` ou `.cr2`, et qu'ils sont directement dans le dossier déposé, pas dans un sous-dossier. Le message « Aucune nouvelle image trouvée » s'affiche alors en bas de la fenêtre.
 
 **Une image affiche « Lecture impossible ».**
 Le fichier est probablement incomplet, par exemple si l'acquisition a été interrompue pendant l'enregistrement. Le message exact apparaît dans la colonne de droite. Rejetez simplement ce fichier.
@@ -235,3 +250,9 @@ C'est une vidéo de caméra couleur enregistrée en brut. Cochez **Débayeriser 
 
 **L'ajout d'un très long SER prend quelques secondes.**
 Chaque image devient une ligne de la liste : une vidéo de 20 000 images donne 20 000 lignes. Les images ne sont lues qu'au moment de les afficher, la mémoire n'est donc pas un problème.
+
+**Un CR2 affiche « installez le programme dcraw ».**
+fitsview a besoin de dcraw ou du module rawpy pour décoder les RAW. Installez dcraw avec la commande de votre distribution (section Installation), puis rouvrez le fichier.
+
+**Un CR2 affiche « Lecture impossible » alors que dcraw est installé.**
+Le boîtier est peut-être plus récent que votre version de dcraw. Installez rawpy (`pip install --user --break-system-packages rawpy`), qui suit mieux les nouveaux modèles. Les CR3 des boîtiers Canon récents ne sont pas encore pris en charge.

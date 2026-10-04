@@ -3,22 +3,25 @@
 """
 fitsview — visionneuse pour trier ses brutes d'astrophotographie.
 
-- Glisser-déposer de fichiers FITS, de vidéos SER ou de dossiers
+- Glisser-déposer de fichiers FITS, de vidéos SER, de RAW Canon (CR2)
+  ou de dossiers
 - Liste des images ; une vidéo SER y apparaît image par image
 - Auto-ajustement de l'histogramme (type STF de PixInsight)
 - Débayerisation rapide (super-pixel) si la matrice de Bayer est connue
 - Lecture de la liste comme une vidéo (SER ou série de FITS)
 - Marquage des images à rejeter (Espace, Suppr ou X)
-- Rangement des FITS rejetés dans « rejetes » (ou suppression)
+- Rangement des fichiers rejetés dans « rejetes » (ou suppression)
 - Export des images choisies en vidéo SER ou en fichiers FITS
 
 Dépendances : python3, PyQt5, numpy, astropy
+Pour les CR2 : le module Python rawpy, ou à défaut le programme dcraw
 """
 
 import os
 import sys
 import shutil
 import struct
+import subprocess
 import functools
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
@@ -40,6 +43,7 @@ from PyQt5.QtWidgets import (
 APP_NAME = "fitsview"
 FITS_EXT = (".fit", ".fits", ".fts", ".fit.gz", ".fits.gz")
 SER_EXT = (".ser",)
+RAW_EXT = (".cr2",)
 REJECT_DIR = "rejetes"
 CACHE_MAX = 12
 
@@ -72,6 +76,14 @@ def is_fits(path):
 
 def is_ser(path):
     return path.lower().endswith(SER_EXT)
+
+
+def is_raw(path):
+    return path.lower().endswith(RAW_EXT)
+
+
+def is_supported(path):
+    return is_fits(path) or is_ser(path) or is_raw(path)
 
 
 def src_name(src):
@@ -237,11 +249,171 @@ def open_ser(path):
     return SerFile(path)
 
 
+# ----------------------------------------------------------------------------
+# Lecture RAW (Canon CR2)
+# ----------------------------------------------------------------------------
+
+def read_tiff_exif(path, limit=2 * 1024 * 1024):
+    """Lit quelques champs EXIF d'un fichier RAW au format TIFF (CR2…).
+    Renvoie un dict, éventuellement vide ; ne lève pas d'exception."""
+    out = {}
+    try:
+        with open(path, "rb") as f:
+            buf = f.read(limit)
+        e = {b"II": "<", b"MM": ">"}.get(buf[:2])
+        if e is None or struct.unpack_from(e + "H", buf, 2)[0] != 42:
+            return out
+        sizes = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8}
+
+        def entries(off):
+            n = struct.unpack_from(e + "H", buf, off)[0]
+            res = {}
+            for k in range(min(n, 500)):
+                tag, typ, cnt, raw = struct.unpack_from(e + "HHI4s", buf,
+                                                        off + 2 + 12 * k)
+                res[tag] = (typ, cnt, raw)
+            return res
+
+        def value(entry):
+            typ, cnt, raw = entry
+            size = sizes.get(typ, 1) * cnt
+            if size > 4:
+                pos = struct.unpack(e + "I", raw)[0]
+                raw = buf[pos:pos + size]
+                if len(raw) < size:
+                    return None
+            if typ == 2:
+                return raw[:cnt].split(b"\0", 1)[0].decode("latin-1").strip()
+            if typ == 3:
+                return struct.unpack_from(e + "H", raw)[0]
+            if typ == 4:
+                return struct.unpack_from(e + "I", raw)[0]
+            if typ in (5, 10):
+                num, den = struct.unpack_from(e + ("II" if typ == 5 else "ii"),
+                                              raw)
+                return num / den if den else None
+            return None
+
+        ifd0 = entries(struct.unpack_from(e + "I", buf, 4)[0])
+        for tag, key in ((0x010F, "make"), (0x0110, "model"),
+                         (0x0132, "datetime")):
+            if tag in ifd0:
+                out[key] = value(ifd0[tag])
+        if 0x8769 in ifd0:
+            exif = entries(value(ifd0[0x8769]))
+            for tag, key in ((0x829A, "exptime"), (0x8827, "iso"),
+                             (0x9003, "datetime"), (0x920A, "focal")):
+                if tag in exif:
+                    v = value(exif[tag])
+                    if v is not None:
+                        out[key] = v
+    except (OSError, struct.error, ValueError, TypeError):
+        pass
+    return out
+
+
+def parse_pnm(buf):
+    """Décode une image PGM/PPM binaire (sortie de dcraw)."""
+    if buf[:2] not in (b"P5", b"P6"):
+        raise ValueError("sortie de dcraw inattendue")
+    vals, i = [], 2
+    while len(vals) < 3:
+        while buf[i:i + 1].isspace():
+            i += 1
+        if buf[i:i + 1] == b"#":
+            i = buf.index(b"\n", i) + 1
+            continue
+        j = i
+        while not buf[j:j + 1].isspace():
+            j += 1
+        vals.append(int(buf[i:j]))
+        i = j
+    i += 1
+    w, h, maxval = vals
+    planes = 3 if buf[:2] == b"P6" else 1
+    dtype = np.dtype(">u2") if maxval > 255 else np.dtype(np.uint8)
+    a = np.frombuffer(buf, dtype=dtype, count=w * h * planes, offset=i)
+    a = a.reshape((h, w, 3) if planes == 3 else (h, w))
+    return a.astype(np.uint16)
+
+
+def decode_raw(path):
+    """Données brutes du capteur (uint16, sans dématriçage) et matrice
+    de Bayer de la zone visible. Utilise rawpy, sinon dcraw."""
+    try:
+        import rawpy
+    except ImportError:
+        rawpy = None
+
+    if rawpy is not None:
+        with rawpy.imread(path) as raw:
+            data = np.array(raw.raw_image_visible, dtype=np.uint16)
+            pattern = None
+            rp = np.asarray(raw.raw_pattern)
+            if rp.shape == (2, 2):
+                desc = raw.color_desc.decode("ascii", "replace")
+                p = "".join(desc[i] for i in rp.flatten())
+                pattern = p if p in BAYER_PATTERNS else None
+        return data, pattern
+
+    exe = shutil.which("dcraw")
+    if exe is None:
+        raise ValueError("pour lire les fichiers CR2, installez le programme "
+                         "dcraw (par ex. sudo apt install dcraw) ou le module "
+                         "Python rawpy")
+    env = dict(os.environ, LC_ALL="C")
+    run = subprocess.run([exe, "-D", "-4", "-t", "0", "-c", path],
+                         capture_output=True, env=env, timeout=180)
+    if run.returncode != 0 or not run.stdout:
+        msg = run.stderr.decode("utf-8", "replace").strip()
+        raise ValueError(msg or "dcraw n'a pas pu lire ce fichier")
+    data = parse_pnm(run.stdout)
+    if data.ndim != 2:
+        raise ValueError("ce RAW n'a pas de matrice de Bayer")
+
+    pattern = None
+    info = subprocess.run([exe, "-i", "-v", path], capture_output=True,
+                          env=env, timeout=60)
+    for line in info.stdout.decode("latin-1").splitlines():
+        if line.startswith("Filter pattern:"):
+            p = line.split(":", 1)[1].strip().replace("/", "")[:4].upper()
+            pattern = p if p in BAYER_PATTERNS else None
+    return data, pattern
+
+
+def read_raw(path):
+    data, pattern = decode_raw(path)
+    meta = read_tiff_exif(path)
+
+    h = fits.Header()
+    h["ROWORDER"] = ("TOP-DOWN", "Order of the rows in the image")
+    if pattern:
+        h["BAYERPAT"] = (pattern, "Bayer color pattern")
+    if isinstance(meta.get("exptime"), float):
+        h["EXPTIME"] = (round(meta["exptime"], 6), "[s] Exposure time (EXIF)")
+    if meta.get("iso"):
+        h["ISOSPEED"] = (int(meta["iso"]), "ISO speed (EXIF)")
+    if isinstance(meta.get("focal"), float) and meta["focal"] > 0:
+        h["FOCALLEN"] = (round(meta["focal"], 1), "[mm] Focal length (EXIF)")
+    model = meta.get("model") or ""
+    make = meta.get("make") or ""
+    camera = model if model.startswith(make) else f"{make} {model}".strip()
+    if camera:
+        h["INSTRUME"] = to_ascii(camera)
+    try:
+        dt = datetime.strptime(meta.get("datetime", ""), "%Y:%m:%d %H:%M:%S")
+        h["DATE-OBS"] = (dt.isoformat(), "Camera clock (EXIF), time zone unknown")
+    except ValueError:
+        pass
+    h["RAWFILE"] = (to_ascii(os.path.basename(path)), "Source RAW file")
+    return data.astype(np.float32), h, 16
+
+
 def read_source(src):
     """(données float32, header, BITPIX) pour un FITS ou une image de SER."""
     path, frame = src
     if frame < 0:
-        return read_fits(path)
+        return read_raw(path) if is_raw(path) else read_fits(path)
     ser = open_ser(path)
     raw = ser.read_frame(frame)
     return (raw.astype(np.float32), ser.header(frame),
@@ -320,6 +492,7 @@ def header_summary(h):
         ("OBJECT", "Objet", ""), ("IMAGETYP", "Type", ""),
         ("FILTER", "Filtre", ""), ("EXPTIME", "Pose", " s"),
         ("EXPOSURE", "Pose", " s"), ("GAIN", "Gain", ""),
+        ("ISOSPEED", "ISO", ""),
         ("CCD-TEMP", "Temp.", " °C"), ("DATE-OBS", "Date", ""),
     ]
     parts, seen = [], set()
@@ -482,14 +655,20 @@ def write_ser(out_path, srcs, progress=None):
 
 
 def export_fits(out_dir, srcs, progress=None):
-    """Copie les FITS et écrit chaque image de SER en un fichier FITS.
+    """Copie les FITS, convertit les RAW et chaque image de SER en FITS.
     Les pixels sont conservés tels quels (8 ou 16 bits)."""
     done = 0
     for i, src in enumerate(srcs):
         if progress and not progress(i, src):
             raise Cancelled()
         path, frame = src
-        if frame < 0:
+        if frame < 0 and is_raw(path):
+            data, header, _ = read_raw(path)
+            stem = os.path.splitext(os.path.basename(path))[0]
+            dst = unique_path(os.path.join(out_dir, stem + ".fits"))
+            fits.PrimaryHDU(data=data.astype(np.uint16),
+                            header=header).writeto(dst)
+        elif frame < 0:
             dst = unique_path(os.path.join(out_dir, os.path.basename(path)))
             shutil.copy2(path, dst)
         else:
@@ -623,7 +802,7 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self.update_count()
         self.statusBar().showMessage(
-            "Glissez-déposez des fichiers FITS ou SER, ou un dossier, "
+            "Glissez-déposez des fichiers FITS, SER ou CR2, ou un dossier, "
             "ou utilisez Fichier ▸ Ajouter des fichiers")
 
     # --- interface -----------------------------------------------------------
@@ -714,7 +893,7 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
 
         m = mb.addMenu("&Fichier")
-        self._action(m, "Ajouter des fichiers FITS ou SER…",
+        self._action(m, "Ajouter des fichiers FITS, SER ou CR2…",
                      self.add_files_dialog, QKeySequence.Open)
         self._action(m, "Ajouter un dossier…", self.add_folder_dialog, "Ctrl+D")
         m.addSeparator()
@@ -728,9 +907,9 @@ class MainWindow(QMainWindow):
                      self.toggle_reject)
         self._action(m, "Garder toutes les images", self.unmark_all)
         m.addSeparator()
-        self._action(m, f"Déplacer les FITS rejetés dans « {REJECT_DIR} »…",
+        self._action(m, f"Déplacer les fichiers rejetés dans « {REJECT_DIR} »…",
                      self.move_rejected, "Ctrl+M")
-        self._action(m, "Supprimer définitivement les FITS rejetés…",
+        self._action(m, "Supprimer définitivement les fichiers rejetés…",
                      self.delete_rejected)
 
         m = mb.addMenu("&Export")
@@ -781,9 +960,9 @@ class MainWindow(QMainWindow):
             if os.path.isdir(p):
                 for name in sorted(os.listdir(p)):
                     full = os.path.join(p, name)
-                    if os.path.isfile(full) and (is_fits(name) or is_ser(name)):
+                    if os.path.isfile(full) and is_supported(name):
                         files.append(full)
-            elif os.path.isfile(p) and (is_fits(p) or is_ser(p)):
+            elif os.path.isfile(p) and is_supported(p):
                 files.append(p)
 
         existing = {it.data(ROLE_SRC) for it in self.all_items()}
@@ -819,13 +998,13 @@ class MainWindow(QMainWindow):
                                 + "\n".join(errors[:20]))
         elif not added and paths:
             self.statusBar().showMessage(
-                "Aucune nouvelle image FITS ou SER trouvée", 4000)
+                "Aucune nouvelle image trouvée", 4000)
 
     def add_files_dialog(self):
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Ajouter des fichiers FITS ou SER", "",
-            "Images FITS et vidéos SER (*.fit *.fits *.fts *.ser *.FIT "
-            "*.FITS *.FTS *.SER *.gz);;Tous les fichiers (*)")
+            self, "Ajouter des fichiers FITS, SER ou CR2", "",
+            "Images FITS, vidéos SER, RAW Canon (*.fit *.fits *.fts *.ser "
+            "*.cr2 *.FIT *.FITS *.FTS *.SER *.CR2 *.gz);;Tous les fichiers (*)")
         if files:
             self.add_paths(files)
 
@@ -906,12 +1085,12 @@ class MainWindow(QMainWindow):
     def move_rejected(self):
         rej, n_ser = self.rejected_fits_items()
         if not rej:
-            QMessageBox.information(self, APP_NAME, "Aucun fichier FITS rejeté."
+            QMessageBox.information(self, APP_NAME, "Aucun fichier rejeté."
                                     + self._ser_note(n_ser))
             return
         if QMessageBox.question(
                 self, APP_NAME,
-                f"Déplacer {len(rej)} fichier(s) FITS rejeté(s) dans un "
+                f"Déplacer {len(rej)} fichier(s) rejeté(s) dans un "
                 f"sous-dossier « {REJECT_DIR} » placé à côté de chaque fichier ?"
                 + self._ser_note(n_ser)
         ) != QMessageBox.Yes:
@@ -933,11 +1112,11 @@ class MainWindow(QMainWindow):
     def delete_rejected(self):
         rej, n_ser = self.rejected_fits_items()
         if not rej:
-            QMessageBox.information(self, APP_NAME, "Aucun fichier FITS rejeté."
+            QMessageBox.information(self, APP_NAME, "Aucun fichier rejeté."
                                     + self._ser_note(n_ser))
             return
         box = QMessageBox(QMessageBox.Warning, APP_NAME,
-                          f"Supprimer définitivement {len(rej)} fichier(s) FITS "
+                          f"Supprimer définitivement {len(rej)} fichier(s) "
                           f"du disque ?\nCette action est irréversible."
                           + self._ser_note(n_ser),
                           QMessageBox.Yes | QMessageBox.No, self)

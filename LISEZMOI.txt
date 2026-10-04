@@ -1,5 +1,5 @@
-fitsview — visionneuse pour trier ses brutes FITS et vidéos SER
-==============================================================
+fitsview — visionneuse pour trier ses brutes FITS, RAW Canon (CR2) et vidéos SER
+================================================================================
 
 Contenu de l'archive
   fitsview.py    le programme
@@ -10,6 +10,7 @@ Contenu de l'archive
 
 Démarrage rapide (Debian, Ubuntu, Mint)
   sudo apt install python3-pyqt5 python3-numpy python3-astropy
+  sudo apt install dcraw   # seulement pour lire les fichiers CR2
   sh installer.sh          # ajoute fitsview au menu
   ./fitsview.py            # ou lancer directement sans installer
 

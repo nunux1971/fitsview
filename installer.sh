@@ -48,14 +48,14 @@ cat > "$APPS/fitsview.desktop" <<FIN
 [Desktop Entry]
 Type=Application
 Name=fitsview
-GenericName=Visionneuse FITS
-Comment=Trier ses brutes FITS d'astrophotographie
+GenericName=Visionneuse FITS, SER et CR2
+Comment=Trier ses brutes FITS, SER et CR2 d'astrophotographie
 Exec=python3 "$DEST/fitsview.py" %F
 Icon=fitsview
 Terminal=false
 Categories=Graphics;Science;Astronomy;Viewer;
-MimeType=image/fits;application/fits;
-Keywords=FITS;astro;astrophotographie;SER;tri;
+MimeType=image/fits;application/fits;image/x-canon-cr2;
+Keywords=FITS;astro;astrophotographie;SER;CR2;RAW;Canon;tri;
 StartupWMClass=fitsview
 FIN
 
